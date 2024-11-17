@@ -1,12 +1,12 @@
-import { SchemaComposer } from 'graphql-compose'
-
-const schemaComposer = new SchemaComposer()
+import { schemaComposer } from 'graphql-compose';
+import './schemas/blockSchema'; 
+import './schemas/transactionSchema'; 
 
 schemaComposer.Query.addFields({
   hello: {
-    type: () => 'String!',
+    type: 'String!',
     resolve: () => 'Hi there, good luck with the assignment!',
   },
-})
+});
 
-export const schema = schemaComposer.buildSchema()
+export const schema = schemaComposer.buildSchema();
