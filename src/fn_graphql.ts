@@ -5,6 +5,7 @@ import { getGraphQLParameters, processRequest } from 'graphql-helix'
 import type { API, HandlerFunction } from 'lambda-api'
 import type { GraphQLSchema } from 'graphql'
 import { blockchainService } from './services/blockchainService'
+import { transactionService } from './services/transactionService'
 
 export function APIGatewayLambda() {
   const isTest = process.env.NODE_ENV === 'test'
@@ -63,6 +64,6 @@ export function mkAPIGatewayHandler(api: API): APIGatewayProxyHandlerV2 {
 
 const api = APIGatewayLambda()
 
-api.any(graphqlApi(schema, () => ({ blockchainService })));
+api.any(graphqlApi(schema, () => ({ blockchainService, transactionService })));
 
 export const handler: APIGatewayProxyHandlerV2 = mkAPIGatewayHandler(api)
