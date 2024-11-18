@@ -11,11 +11,14 @@
     "test:watch": "jest --watch --onlyChanged"
   },
   "dependencies": {
+    "axios": "^1.7.7",
+    "dataloader": "^2.2.2",
     "graphql": "^15.5.1",
     "graphql-compose": "^9.0.8",
     "graphql-helix": "^1.13.0",
     "graphql-request": "^5.0.0",
     "graphql-scalars": "^1.18.0",
+    "ioredis": "^5.4.1",
     "lambda-api": "^0.11.2"
   },
   "devDependencies": {

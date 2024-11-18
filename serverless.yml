@@ -28,5 +28,6 @@ custom:
 functions:
   graphql:
     handler: src/fn_graphql.handler
+    timeout: 200
     events:
       - httpApi: '*'
