@@ -1,5 +1,6 @@
 import axios from 'axios';
 import DataLoader from 'dataloader';
+import redisClient from '../utils/redisClient';
 
 const BASE_URL = 'https://blockchain.info';
 
@@ -11,15 +12,14 @@ export const blockchainService = {
   energyConsumptionLoader: new DataLoader<string, number>(async (blockHashes: readonly string[]) => {
     const blockSizes = await Promise.all(
       blockHashes.map(async (blockHash): Promise<number> => {
-        const block: Block | null = await blockchainService.fetchBlock(blockHash);
+        const blockSize = await blockchainService.fetchBlockSizeWithCache(blockHash);
 
-
-        if (!block || typeof block.size !== 'number') {
+        if (blockSize === null) {
           console.warn(`Skipping invalid or missing block: ${blockHash}`);
-          return 0; 
+          return 0;
         }
 
-        return block.size;
+        return blockSize;
       })
     );
 
@@ -37,6 +37,23 @@ export const blockchainService = {
     }
   },
 
+  async fetchBlockSizeWithCache(blockHash: string): Promise<number | null> {
+    // Check if block size is already cached
+    const cachedSize = await redisClient.get(`block:${blockHash}`);
+    if (cachedSize !== null) {
+      return parseFloat(cachedSize);
+    }
+
+    // Fetch block data if not cached
+    const block = await blockchainService.fetchBlock(blockHash);
+    if (block && typeof block.size === 'number') {
+      await redisClient.set(`block:${blockHash}`, block.size.toString(), 'EX', 60 * 60 * 24 * 7); // Cache for 7 days
+      return block.size;
+    }
+
+    return null;
+  },
+
   async fetchBlocksForDate(dateInMillis: number) {
     const response = await axios.get(`${BASE_URL}/blocks/${dateInMillis}?format=json`);
     return response.data;
@@ -45,51 +62,42 @@ export const blockchainService = {
   async getTotalEnergyConsumption(days: number): Promise<number> {
     const now = Date.now();
     const millisPerDay = 24 * 60 * 60 * 1000;
-    const batchSize = 5; 
-    const cache = new Map<number, number>(); 
+    const batchSize = 5;
 
     const generateTimestamps = (start: number, count: number) =>
       Array.from({ length: count }, (_, j) => now - (start + j) * millisPerDay);
 
-    const calculateBatchEnergy = async (timestamps: number[]) => {
-      const cachedEnergies = timestamps.map((timestamp) => cache.get(timestamp) || 0);
-      const missingTimestamps = timestamps.filter((timestamp) => !cache.has(timestamp));
+    const calculateEnergyForBlocks = async (blockHashes: string[]): Promise<number> => {
+      const blockSizes = await Promise.all(
+        blockHashes.map(async (hash) => {
+          const size = await blockchainService.fetchBlockSizeWithCache(hash);
+          return size ? size * 4.56 : 0; 
+        })
+      );
 
+      return blockSizes.reduce((sum, energy) => sum + energy, 0); 
+    };
+
+    const calculateBatchEnergy = async (timestamps: number[]): Promise<number> => {
       const blocksDataArray = await Promise.all(
-        missingTimestamps.map((timestamp) => this.fetchBlocksForDate(timestamp))
+        timestamps.map((timestamp) => blockchainService.fetchBlocksForDate(timestamp))
       );
 
       const blockHashes = blocksDataArray.flatMap((blocksData) =>
         blocksData?.map((block: any) => block.hash) || []
       );
 
-      const blockSizes = await Promise.all(
-        blockHashes.map((hash) => this.fetchBlock(hash))
-      );
-
-      missingTimestamps.forEach((timestamp, index) => {
-        const dailySize = blockSizes[index]?.size || 0;
-        const energy = dailySize * 4.56;
-        cache.set(timestamp, energy);
-      });
-
-      return [...cachedEnergies, ...missingTimestamps.map((t) => cache.get(t) || 0)].reduce(
-        (sum, energy) => sum + energy,
-        0
-      );
+      return calculateEnergyForBlocks(blockHashes);
     };
 
+    let totalEnergy = 0;
 
-    const totalEnergy = await Array.from(
-      { length: Math.ceil(days / batchSize) },
-      (_, batchIndex) => batchIndex * batchSize
-    ).reduce(async (accPromise, batchStart) => {
-      const acc = await accPromise; 
+    for (let batchStart = 0; batchStart < days; batchStart += batchSize) {
       const batchDays = Math.min(batchSize, days - batchStart);
       const timestamps = generateTimestamps(batchStart, batchDays);
       const batchEnergy = await calculateBatchEnergy(timestamps);
-      return acc + batchEnergy;
-    }, Promise.resolve(0)); 
+      totalEnergy += batchEnergy;
+    }
 
     console.log(`Total Energy Consumption: ${totalEnergy}`);
     return totalEnergy;
