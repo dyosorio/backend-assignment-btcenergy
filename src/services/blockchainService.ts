@@ -10,20 +10,44 @@ interface Block {
 
 export const blockchainService = {
   energyConsumptionLoader: new DataLoader<string, number>(async (blockHashes: readonly string[]) => {
-    const blockSizes = await Promise.all(
-      blockHashes.map(async (blockHash): Promise<number> => {
-        const blockSize = await blockchainService.fetchBlockSizeWithCache(blockHash);
+    const blockSizes = await blockchainService.fetchBlockSizesWithCache(blockHashes as string[]);
 
-        if (blockSize === null) {
-          console.warn(`Skipping invalid or missing block: ${blockHash}`);
-          return 0;
+    const results: number[] = [];
+    const blocksToFetch: string[] = [];
+
+    blockSizes.forEach((size, index) => {
+      if (size !== null) {
+        results[index] = size * 4.56;
+      } else {
+        blocksToFetch.push(blockHashes[index]);
+        results[index] = 0; 
+      }
+    });
+
+    if (blocksToFetch.length > 0) {
+      const fetchedBlocks = await Promise.all(
+        blocksToFetch.map(async (blockHash) => {
+          const block = await blockchainService.fetchBlock(blockHash);
+          if (block && typeof block.size === 'number') {
+            await redisClient.set(`block:${blockHash}`, block.size.toString(), 'EX', 60 * 60 * 24 * 7);
+            return block.size * 4.56;
+          } else {
+            console.warn(`Skipping invalid or missing block: ${blockHash}`);
+            return 0;
+          }
+        })
+      );
+
+      let fetchIndex = 0;
+      blockSizes.forEach((size, index) => {
+        if (size === null) {
+          results[index] = fetchedBlocks[fetchIndex];
+          fetchIndex += 1;
         }
+      });
+    }
 
-        return blockSize;
-      })
-    );
-
-    return blockSizes.map((size) => size * 4.56);
+    return results;
   }),
 
   async fetchBlock(blockHash: string): Promise<Block | null> {
@@ -37,26 +61,27 @@ export const blockchainService = {
     }
   },
 
-  async fetchBlockSizeWithCache(blockHash: string): Promise<number | null> {
-    // Check if block size is already cached
-    const cachedSize = await redisClient.get(`block:${blockHash}`);
-    if (cachedSize !== null) {
-      return parseFloat(cachedSize);
-    }
+  async fetchBlockSizesWithCache(blockHashes: string[]): Promise<(number | null)[]> {
+    const keys = blockHashes.map(hash => `block:${hash}`);
 
-    // Fetch block data if not cached
-    const block = await blockchainService.fetchBlock(blockHash);
-    if (block && typeof block.size === 'number') {
-      await redisClient.set(`block:${blockHash}`, block.size.toString(), 'EX', 60 * 60 * 24 * 7); // Cache for 7 days
-      return block.size;
-    }
+    try {
+      const cachedSizes: (string | null)[] = await redisClient.mget(keys);
 
-    return null;
+      return cachedSizes.map(size => (size !== null ? parseFloat(size) : null));
+    } catch (error) {
+      console.error('Error fetching block sizes from Redis:', error);
+      return blockHashes.map(() => null);
+    }
   },
 
   async fetchBlocksForDate(dateInMillis: number) {
-    const response = await axios.get(`${BASE_URL}/blocks/${dateInMillis}?format=json`);
-    return response.data;
+    try {
+      const response = await axios.get(`${BASE_URL}/blocks/${dateInMillis}?format=json`);
+      return response.data;
+    } catch (error) {
+      console.error(`Failed to fetch blocks for date: ${dateInMillis}`, error);
+      return [];
+    }
   },
 
   async getTotalEnergyConsumption(days: number): Promise<number> {
@@ -68,14 +93,11 @@ export const blockchainService = {
       Array.from({ length: count }, (_, j) => now - (start + j) * millisPerDay);
 
     const calculateEnergyForBlocks = async (blockHashes: string[]): Promise<number> => {
-      const blockSizes = await Promise.all(
-        blockHashes.map(async (hash) => {
-          const size = await blockchainService.fetchBlockSizeWithCache(hash);
-          return size ? size * 4.56 : 0; 
-        })
-      );
+      const energies = await blockchainService.energyConsumptionLoader.loadMany(blockHashes);
 
-      return blockSizes.reduce((sum, energy) => sum + energy, 0); 
+      const validEnergies = energies.filter((energy): energy is number => !(energy instanceof Error));
+
+      return validEnergies.reduce((sum, energy) => sum + energy, 0);
     };
 
     const calculateBatchEnergy = async (timestamps: number[]): Promise<number> => {
