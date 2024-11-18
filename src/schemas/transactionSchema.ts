@@ -14,7 +14,7 @@ schemaComposer.Query.addFields({
     type: '[TransactionEnergy!]!',
     args: {
       blockHash: 'String!',
-      limit: { type: 'Int', defaultValue: 15 },
+      limit: { type: 'Int' },
       offset: { type: 'Int', defaultValue: 0 },
     },
     resolve: async (_, { blockHash, limit, offset }, { transactionService }) => {
